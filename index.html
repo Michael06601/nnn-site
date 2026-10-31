@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>No Nut November: Roll Call</title>
-<meta name="description" content="Enlist for No Nut November 2026. Report casualties. Medal the survivors.">
+<meta name="description" content="Enlist for No Nut November 2026. Check in daily, report casualties, join a squad, and medal the survivors.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥜</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -26,7 +26,7 @@ h2{font-size:1.6rem;margin:30px 0 8px}
 .stats span{font-size:.85rem;color:var(--muted)}
 .day{font-family:var(--marker);color:var(--yellow);font-size:1.4rem;margin:0 0 14px}
 .panel{border:2px dashed var(--ghost);border-radius:6px;padding:16px;margin:16px 0}
-label{display:block;font-size:.9rem;color:var(--muted);margin-bottom:4px}
+label{display:block;font-size:.9rem;color:var(--muted);margin:10px 0 4px}
 input,textarea{width:100%;font:inherit;background:var(--edge);color:var(--chalk);border:2px solid var(--ghost);border-radius:4px;padding:10px}
 input:focus-visible,textarea:focus-visible,button:focus-visible{outline:3px solid var(--yellow);outline-offset:2px}
 textarea{min-height:84px;resize:vertical}
@@ -41,18 +41,22 @@ ul{list-style:none;margin:0;padding:0}
 li{padding:12px 0;border-bottom:1px solid var(--ghost);display:flex;gap:12px;justify-content:space-between;align-items:flex-start}
 li:last-child{border-bottom:0}
 .name{font-weight:600}.me{color:var(--yellow);font-size:.85rem}
+.tag{display:inline-block;font-size:.75rem;border:1px solid var(--ghost);border-radius:3px;padding:0 6px;margin-left:6px;color:var(--muted);vertical-align:middle}
+.tag.awol{color:var(--red);border-color:var(--red)}
 .why{color:var(--muted);margin:2px 0 0;overflow-wrap:anywhere}
 .empty{color:var(--muted);font-style:italic}
 .note{color:var(--muted);font-size:.85rem}
 .msg{color:var(--yellow);min-height:1.4em;margin:8px 0 0}
-.btns{display:flex;gap:6px;flex-wrap:wrap}
+.btns{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.ticker li{padding:6px 0;font-size:.9rem;color:var(--muted)}
 </style>
 </head>
 <body>
 <main>
 <section class="board">
   <h1>No Nut November</h1>
-  <p class="sub">Enlist, hold the line, and report in if you fall. Survivors earn medals from fellow soldiers on December 1.</p>
+  <p class="sub">Enlist, check in every day, and report in if you fall. Survivors earn medals from fellow soldiers on December 1.</p>
   <p class="day" id="day"></p>
   <div class="stats">
     <div><b id="s-all">0</b><span>enlisted</span></div>
@@ -62,7 +66,10 @@ li:last-child{border-bottom:0}
   </div>
   <p class="msg" id="msg" aria-live="polite"></p>
   <div class="panel" id="panel"></div>
+
+  <h2>Latest</h2><ul class="ticker" id="tick"></ul>
   <h2 id="h-up">Standing</h2><ul id="up"></ul>
+  <h2>Squads</h2><ul id="squads"></ul>
   <h2>Casualty reports</h2><ul id="down"></ul>
   <p class="note" id="adm"></p>
 </section>
@@ -73,14 +80,12 @@ import {initializeApp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase
 import {getAuth,signInAnonymously,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {getFirestore,collection,doc,setDoc,updateDoc,deleteDoc,onSnapshot,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
-/* ====== PASTE YOUR FIREBASE WEB CONFIG HERE ====== */
 const firebaseConfig = {
   apiKey: "AIzaSyBIfvHXDCbUqO1ARzlYJY4doT85A-xdrGQ",
   authDomain: "no-nut-november-38eca.firebaseapp.com",
   projectId: "no-nut-november-38eca",
   appId: "1:1087077101223:web:ba9ba9383587113e633582"
 };
-/* ================================================= */
 
 const START=Date.UTC(2026,10,1),TOTAL=30,DAY=86400000;
 const $=i=>document.getElementById(i);
@@ -92,16 +97,29 @@ function todayIdx(){
   if(/^\d{4}-\d{2}-\d{2}$/.test(q||'')){const a=q.split('-');return Math.floor((Date.UTC(+a[0],+a[1]-1,+a[2])-START)/DAY)+1;}
   return Math.floor((Date.UTC(n.getFullYear(),n.getMonth(),n.getDate())-START)/DAY)+1;
 }
-const t=todayIdx(),ended=t>TOTAL,started=t>=1;
+const t=todayIdx(),ended=t>TOTAL,started=t>=1,cur=Math.min(Math.max(t,1),TOTAL);
 let me=null,soldiers={},medals={},reports={},reported=new Set(),mt;
 const say=m=>{$('msg').textContent=m;clearTimeout(mt);mt=setTimeout(()=>$('msg').textContent='',5000);};
 const el=(tag,cls,txt)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e;};
 const mc=id=>Object.values(medals).filter(m=>(m.to||[]).includes(id)).length;
 const dl=d=>new Date(START+(d-1)*DAY).toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'UTC'});
 const ms=x=>x&&x.toMillis?x.toMillis():0;
+const days=s=>Array.isArray(s.days)?s.days:[];
+const rank=n=>n>=30?'Veteran':n>=20?'Captain':n>=10?'Sergeant':n>=3?'Private':'Recruit';
+function streak(s){const set=new Set(days(s));let k=set.has(cur)?cur:cur-1,n=0;while(k>=1&&set.has(k)){n++;k--;}return n;}
+const awol=s=>started&&!ended&&days(s).length>0&&Math.max(...days(s))<cur-1;
+const tag=(txt,c)=>el('span','tag'+(c?' '+c:''),txt);
 
 let db=null;
 const configured=!firebaseConfig.apiKey.startsWith('PASTE')&&!firebaseConfig.appId.startsWith('PASTE');
+
+async function share(text){
+  const mine=soldiers[me],sq=mine&&mine.squad?'?squad='+encodeURIComponent(mine.squad):'';
+  const full=text+' '+location.origin+location.pathname+sq;
+  if(navigator.share){try{await navigator.share({text:full});return;}catch(e){}}
+  try{await navigator.clipboard.writeText(full);say('Copied. Paste it anywhere.');}catch(e){prompt('Copy this:',full);}
+}
+function shareBtn(text){const b=el('button','small','Share');b.style.marginTop='10px';b.onclick=()=>share(text);return b;}
 
 function render(){
   const ids=Object.keys(soldiers),up=ids.filter(i=>soldiers[i].status!=='casualty'),down=ids.filter(i=>soldiers[i].status==='casualty');
@@ -111,63 +129,110 @@ function render(){
   $('s-up-l').textContent=ended?'survivors':'standing';$('h-up').textContent=ended?'Honor roll':'Standing';
   if(ADMIN)$('adm').textContent='Admin mode. Your user ID: '+(me||'(signing in)');
 
+  // Panel
   const p=$('panel');p.textContent='';
   const mine=me&&soldiers[me];
-  if(!configured)p.appendChild(el('p','note','Setup needed: paste your Firebase web config into index.html.'));
+  if(!configured)p.appendChild(el('p','note','Setup needed: add your Firebase web config.'));
   else if(!me)p.appendChild(el('p','note','Connecting...'));
   else if(!mine){
     const l=el('label',null,'Choose a callsign (2 to 24 characters)');l.htmlFor='cs';
     const i=el('input');i.id='cs';i.maxLength=24;i.autocomplete='off';
+    const l2=el('label',null,'Squad (optional): a friend group or creator name, up to 20 characters');l2.htmlFor='sq';
+    const sq=el('input');sq.id='sq';sq.maxLength=20;sq.autocomplete='off';sq.value=(new URLSearchParams(location.search).get('squad')||'').slice(0,20);
     const b=el('button','go','Enlist now');
     b.onclick=async()=>{
-      const c=i.value.trim();if(c.length<2){say('Callsign needs at least 2 characters.');return;}
-      if(clean(c)!==c){say('Pick a different callsign.');return;}
+      const c=i.value.trim(),s=sq.value.trim();
+      if(c.length<2){say('Callsign needs at least 2 characters.');return;}
+      if(clean(c)!==c||clean(s)!==s){say('Pick a different callsign or squad name. No links or bad words.');return;}
       b.disabled=true;
-      try{await setDoc(doc(db,'soldiers',me),{callsign:c,status:'active',enlisted:serverTimestamp()});say('Welcome, '+c+'. Stay strong.');}
+      const data={callsign:c,status:'active',days:[],enlisted:serverTimestamp()};if(s)data.squad=s;
+      try{await setDoc(doc(db,'soldiers',me),data);say('Welcome, '+c+'. Stay strong.');}
       catch(e){b.disabled=false;say('Could not enlist. Try again.');}
     };
-    p.append(l,i,b,el('p','note','Your callsign is public. Your identity is tied to this browser, so keep using the same one.'));
-  }else if(mine.status==='casualty')p.appendChild(el('p',null,'You fell on '+dl(mine.fellDay)+'. Your report is posted below. Rest up, soldier.'));
-  else if(ended)p.appendChild(el('p',null,`You made it, ${clean(mine.callsign)}. You hold ${mc(me)} medal${mc(me)===1?'':'s'}. Pin medals on your fellow survivors below.`));
-  else if(!started)p.appendChild(el('p',null,'You are enlisted as '+clean(mine.callsign)+'. Day 1 begins November 1.'));
-  else{
-    const l=el('label',null,'Still standing? If you fell, say what happened (3 to 140 characters, no links).');l.htmlFor='why';
-    const ta=el('textarea');ta.id='why';ta.maxLength=140;
-    const d=el('button','danger','Report myself as a casualty');
-    d.onclick=async()=>{
-      const r=ta.value.trim();if(r.length<3){say('State your reason first.');return;}
-      if(!confirm('Report yourself as a casualty? This cannot be undone.'))return;
-      d.disabled=true;
-      try{await updateDoc(doc(db,'soldiers',me),{status:'casualty',fellDay:Math.min(Math.max(t,1),TOTAL),reason:r,fellAt:serverTimestamp()});say('Casualty logged.');}
-      catch(e){d.disabled=false;say('Could not file the report. Avoid links and try again.');}
-    };
-    p.append(el('p',null,'Enlisted as '+clean(mine.callsign)+'.'),l,ta,d);
+    p.append(l,i,l2,sq,b,el('p','note','Your callsign is public. Your identity is tied to this browser, so keep using the same one.'));
+  }else if(mine.status==='casualty'){
+    p.append(el('p',null,'You fell on '+dl(mine.fellDay)+'. Your report is posted below. Rest up, soldier.'),
+      shareBtn(`I fell on ${dl(mine.fellDay)} of No Nut November: "${clean(mine.reason)}". Think you can last longer? Join the roll:`));
+  }else if(ended){
+    p.append(el('p',null,`You made it, ${clean(mine.callsign)}. ${days(mine).length} check-ins, ${mc(me)} medal${mc(me)===1?'':'s'}. Pin medals on your fellow survivors below.`),
+      shareBtn(`I survived No Nut November: ${days(mine).length} check-ins and ${mc(me)} medals. Join the roll next year:`));
+  }else{
+    const n=days(mine).length;
+    p.appendChild(el('p',null,`${clean(mine.callsign)} · ${rank(n)}${started?' · '+streak(mine)+'-day streak':''}`));
+    if(!started)p.appendChild(el('p','note','Check-ins open on November 1.'));
+    else{
+      const did=days(mine).includes(cur);
+      const ci=el('button','go',did?'Checked in for day '+cur:'Check in for day '+cur);ci.disabled=did;
+      ci.onclick=async()=>{ci.disabled=true;try{await updateDoc(doc(db,'soldiers',me),{days:[...new Set([...days(mine),cur])].sort((a,b)=>a-b)});say('Checked in. Day '+cur+' counted.');}catch(e){ci.disabled=false;say('Check-in failed. Try again.');}};
+      p.appendChild(ci);
+      const l=el('label',null,'If you fell, say what happened (3 to 140 characters, no links).');l.htmlFor='why';
+      const ta=el('textarea');ta.id='why';ta.maxLength=140;
+      const d=el('button','danger','Report myself as a casualty');
+      d.onclick=async()=>{
+        const r=ta.value.trim();if(r.length<3){say('State your reason first.');return;}
+        if(!confirm('Report yourself as a casualty? This cannot be undone.'))return;
+        d.disabled=true;
+        try{await updateDoc(doc(db,'soldiers',me),{status:'casualty',fellDay:cur,reason:r,fellAt:serverTimestamp()});say('Casualty logged.');}
+        catch(e){d.disabled=false;say('Could not file the report. Avoid links and try again.');}
+      };
+      p.append(l,ta,d);
+    }
+    const row=el('div','row');
+    row.appendChild(shareBtn(started?`Day ${cur} of No Nut November. ${streak(mine)}-day streak, rank ${rank(n)}. Still standing. Join the roll:`:'I just enlisted for No Nut November. Think you can survive 30 days? Join the roll:'));
+    const dis=el('button','small','Discharge (leave quietly)');dis.style.marginTop='10px';
+    dis.onclick=async()=>{if(confirm('Leave the roll? Your entry is deleted and you can enlist again later.')){try{await deleteDoc(doc(db,'soldiers',me));say('Discharged.');}catch(e){say('Could not discharge.');}}};
+    row.appendChild(dis);p.appendChild(row);
   }
 
+  // Latest ticker
+  const ev=[];
+  ids.forEach(id=>{const s=soldiers[id],n=clean(s.callsign);
+    if(ms(s.enlisted))ev.push([ms(s.enlisted),n+' enlisted']);
+    if(s.status==='casualty'&&ms(s.fellAt))ev.push([ms(s.fellAt),n+' fell on '+dl(s.fellDay||1)]);});
+  ev.sort((a,b)=>b[0]-a[0]);
+  const tk=$('tick');tk.textContent='';
+  if(!ev.length)tk.appendChild(el('li','empty','Quiet so far.'));
+  ev.slice(0,6).forEach(e=>tk.appendChild(el('li',null,e[1])));
+
+  // Standing / honor roll
   const ul=$('up');ul.textContent='';
-  up.sort((a,b)=>mc(b)-mc(a)||ms(soldiers[a].enlisted)-ms(soldiers[b].enlisted));
+  up.sort((a,b)=>ended?(days(soldiers[b]).length-days(soldiers[a]).length||mc(b)-mc(a)):(streak(soldiers[b])-streak(soldiers[a])||ms(soldiers[a].enlisted)-ms(soldiers[b].enlisted)));
   if(!up.length)ul.appendChild(el('li','empty',ended?'No survivors on record.':'No one enlisted yet. Be the first.'));
   const given=(medals[me]&&medals[me].to)||[];
   up.forEach(id=>{
-    const s=soldiers[id],li=el('li'),left=el('div');
+    const s=soldiers[id],li=el('li'),left=el('div'),n=days(s).length;
     left.appendChild(el('span','name',clean(s.callsign)));
     if(id===me)left.appendChild(el('span','me','  (you)'));
-    if(ended)left.appendChild(el('p','why',mc(id)+' medal'+(mc(id)===1?'':'s')));
+    left.appendChild(tag(rank(n)));
+    if(s.squad)left.appendChild(tag(clean(s.squad)));
+    if(awol(s))left.appendChild(tag('AWOL','awol'));
+    left.appendChild(el('p','why',ended?`${n} check-ins · ${mc(id)} medal${mc(id)===1?'':'s'}`:started?`${streak(s)}-day streak · ${n} check-in${n===1?'':'s'}`:'Enlisted'));
     li.appendChild(left);
     const btns=el('div','btns');
     if(ended&&me&&id!==me&&soldiers[me]&&soldiers[me].status!=='casualty'){
       const on=given.includes(id),mb=el('button','medal'+(on?' on':''),on?'Medal given':'Give medal');
       mb.setAttribute('aria-pressed',on);
       mb.onclick=async()=>{
-        const cur=given.slice(),k=cur.indexOf(id);k>-1?cur.splice(k,1):cur.push(id);
+        const c=given.slice(),k=c.indexOf(id);k>-1?c.splice(k,1):c.push(id);
         mb.disabled=true;
-        try{await setDoc(doc(db,'medals',me),{to:cur});}catch(e){mb.disabled=false;say('Could not update the medal.');}
+        try{await setDoc(doc(db,'medals',me),{to:c});}catch(e){mb.disabled=false;say('Could not update the medal.');}
       };btns.appendChild(mb);
     }
     if(ADMIN)btns.appendChild(delBtn(id));
     li.appendChild(btns);ul.appendChild(li);
   });
 
+  // Squads
+  const g={};
+  ids.forEach(id=>{const s=soldiers[id];if(!s.squad)return;const k=clean(s.squad).trim().toLowerCase();
+    (g[k]=g[k]||{name:clean(s.squad),total:0,alive:0});g[k].total++;if(s.status!=='casualty')g[k].alive++;});
+  const sl=$('squads');sl.textContent='';
+  const gs=Object.values(g).sort((a,b)=>b.alive/b.total-a.alive/a.total||b.total-a.total).slice(0,8);
+  if(!gs.length)sl.appendChild(el('li','empty','No squads yet. Add ?squad=YourName to the link to start one.'));
+  gs.forEach(x=>{const li=el('li'),d=el('div');d.appendChild(el('span','name',x.name));
+    d.appendChild(el('p','why',`${x.alive} of ${x.total} standing · ${Math.round(100*x.alive/x.total)}% survival`));li.appendChild(d);sl.appendChild(li);});
+
+  // Casualties
   const dn=$('down');dn.textContent='';
   down.sort((a,b)=>ms(soldiers[b].fellAt)-ms(soldiers[a].fellAt));
   if(!down.length)dn.appendChild(el('li','empty','No casualties yet.'));
@@ -175,6 +240,7 @@ function render(){
     const s=soldiers[id],li=el('li'),left=el('div');
     left.appendChild(el('span','name',clean(s.callsign)));
     if(id===me)left.appendChild(el('span','me','  (you)'));
+    if(s.squad)left.appendChild(tag(clean(s.squad)));
     left.appendChild(el('p','why','Fell on '+dl(s.fellDay||1)+': '+clean(s.reason||'No reason given.')));
     if(ADMIN)left.appendChild(el('p','note',(reports[id]||0)+' report(s)'));
     li.appendChild(left);
